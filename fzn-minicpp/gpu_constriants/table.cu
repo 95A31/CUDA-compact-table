@@ -11,6 +11,7 @@
 using namespace std;
 using namespace Fca;
 using namespace Gpu::Memory;
+using namespace Gpu::Parallel;
 using namespace Fca::Math;
 using namespace Fca::Bits;
 
@@ -23,6 +24,7 @@ TableGPU::TableGPU(vector<var<int>::Ptr> & vars, vector<vector<int>> & tuples) :
     // CUDA initialization
     cudaDeviceProp cu_prop;
     cudaGetDeviceProperties(&cu_prop, 0);
+    smCount = cu_prop.multiProcessorCount;
     cudaStreamCreate(&cuStream);
 }
 
@@ -32,40 +34,40 @@ void TableGPU::allocateInstanceData()
     instData_d = mallocHost<InstanceData>(sizeof(InstanceData)); // Host is correct
 
     u32 const readOnlyMemSize =
-        BigWordAlign + supportMemSize;
+        LinearAllocator::DefaultAlign + tuplesMemSize;
 
     readOnlyAlloc_h = new LinearAllocator(mallocHost<void>(readOnlyMemSize), readOnlyMemSize);
-    instData_h->supports = readOnlyAlloc_h->allocate<u32>(supportMemSize,  BigWordAlign);
+    instData_h->tuples = readOnlyAlloc_h->allocate<i32>(tuplesMemSize);
 
     readOnlyAlloc_d = new LinearAllocator(mallocDevice<void>(readOnlyMemSize), readOnlyMemSize);
-    instData_d->supports = readOnlyAlloc_d->allocate<u32>(supportMemSize,  BigWordAlign);
+    instData_d->tuples = readOnlyAlloc_d->allocate<i32>(tuplesMemSize);
 
     u32 const inputOutputMemSize =
         LinearAllocator::DefaultAlign + changedVarsMemSize +
         LinearAllocator::DefaultAlign + unfixedVarsMemSize +
         LinearAllocator::DefaultAlign + domainsInfoMemSize +
-        LinearAllocator::DefaultAlign + sizeof(u32) + // someValidTuple
-        BigWordAlign + validTuplesMemSize +
+        LinearAllocator::DefaultAlign + sizeof(u32) + // nValidTuples
+        LinearAllocator::DefaultAlign + validTuplesMemSize +
         LinearAllocator::DefaultAlign + domainsMemSize;
 
     inputOutputAlloc_h = new LinearAllocator(mallocHost<void>(inputOutputMemSize), inputOutputMemSize);
     instData_h->changedVars = inputOutputAlloc_h->allocate<u32>(changedVarsMemSize);
     instData_h->unfixedVars = inputOutputAlloc_h->allocate<u32>(unfixedVarsMemSize);
     instData_h->domainsInfo = inputOutputAlloc_h->allocate<DomainsInfo>(domainsInfoMemSize);
-    instData_h->someValidTuple = inputOutputAlloc_h->allocate<u32>(sizeof(u32));
-    instData_h->validTuples = inputOutputAlloc_h->allocate<u32>(validTuplesMemSize, BigWordAlign);
+    instData_h->nValidTuples = inputOutputAlloc_h->allocate<u32>(sizeof(u32));
+    instData_h->validTuples = inputOutputAlloc_h->allocate<u32>(validTuplesMemSize);
     instData_h->domains = inputOutputAlloc_h->allocate<u32>(domainsMemSize);
 
     inputOutputAlloc_d = new LinearAllocator(mallocDevice<void>(inputOutputMemSize), inputOutputMemSize);
     instData_d->changedVars = inputOutputAlloc_d->allocate<u32>(changedVarsMemSize);
     instData_d->unfixedVars = inputOutputAlloc_d->allocate<u32>(unfixedVarsMemSize);
     instData_d->domainsInfo = inputOutputAlloc_d->allocate<DomainsInfo>(domainsInfoMemSize);
-    instData_d->someValidTuple = inputOutputAlloc_d->allocate<u32>(sizeof(u32));
-    instData_d->validTuples = inputOutputAlloc_d->allocate<u32>(validTuplesMemSize, BigWordAlign);
+    instData_d->nValidTuples = inputOutputAlloc_d->allocate<u32>(sizeof(u32));
+    instData_d->validTuples = inputOutputAlloc_d->allocate<u32>(validTuplesMemSize);
     instData_d->domains = inputOutputAlloc_d->allocate<u32>(domainsMemSize);
 
-    beginOutputMem_h = instData_h->someValidTuple;
-    beginOutputMem_d = instData_d->someValidTuple;
+    beginOutputMem_h = instData_h->nValidTuples;
+    beginOutputMem_d = instData_d->nValidTuples;
     void const * const endOutputMem_h = inputOutputAlloc_h->getFreeMemory();
     outputMemSize = reinterpret_cast<std::uintptr_t>(endOutputMem_h) - reinterpret_cast<std::uintptr_t>(beginOutputMem_h);
 }
@@ -74,18 +76,16 @@ void TableGPU::post()
 {
     for (auto const & v : vars)
     {
-        v->propagateOnBoundChange(this);
+        v->propagateOnDomainChange(this);
     }
 
     allocateInstanceData();
-    tmpMask = static_cast<u32*>(aligned_alloc(BigWordAlign, tmpMaskMemSize));
+    tmpValidTuples = static_cast<u32*>(malloc(validTuplesMemSize));
 
     initializeInstanceData(instData_h);
 
     instData_d->nVars = instData_h->nVars;
     instData_d->nTuples = instData_h->nTuples;
-    instData_d->supportsCols = instData_h->supportsCols;
-    instData_d->supportsRows = instData_h->supportsRows;
     instData_d->maxWordsInDomain = instData_h->maxWordsInDomain;
 
     cudaMemcpyAsync(
@@ -101,23 +101,20 @@ void TableGPU::post()
         lastSize.set(vIdx, INT_MAX);
     }
 
-    // Initialize valid tuples
-    u32 const nWords = validTuples.size();
-    for (u32 wIdx = 0; wIdx < nWords; wIdx += 1)
-    {
-        validTuples.set(wIdx, UINT_MAX);
-    }
-
     propagate();
 }
 void TableGPU::propagate()
 {
     updateInstanceData(instData_h);
+    instData_d->nChangedVars = instData_h->nChangedVars;
+    instData_d->nUnfixedVars = instData_h->nUnfixedVars;
+
     updateValidTuples(instData_h);
 
-    if (*instData_h->someValidTuple and instData_h->nUnfixedVars != 0)
+    Timer::begin("TableGPU::updateDomains");
+    if (*instData_h->nValidTuples > 0 and instData_h->nUnfixedVars > 0)
     {
-        Timer::begin("TableGPU::updateDomains");
+        clearDomains(instData_h, instData_h->domains);
 
         cudaMemcpyAsync(
             inputOutputAlloc_d->getMemory(),
@@ -126,12 +123,14 @@ void TableGPU::propagate()
             cudaMemcpyHostToDevice,
             cuStream);
 
-        u32 const gridSizeX = ceilDivPosInt(instData_h->maxWordsInDomain, nWordsPerBlock);
-        u32 const gridSizeY = instData_h->nUnfixedVars;
-        u32 const sharedMemSize = 0;
+        u32 const gridSizeX = instData_h->nUnfixedVars;
+        u32 const gridSizeY = ceilDivPosInt(*instData_h->nValidTuples, 128u);
+        u32 const sharedMemSize =
+            LinearAllocator::DefaultAlign + domainsMemSize +
+            LinearAllocator::DefaultAlign + domainsInfoMemSize;
         dim3 gridSize(gridSizeX,gridSizeY,1);
 
-        updateDomainsKernel<<<gridSize, BlockSize, sharedMemSize, cuStream>>>(*instData_d);
+        updateDomainsKernel<<<gridSize, 32, sharedMemSize, cuStream>>>(*instData_d, domainsMemSize, domainsInfoMemSize);
 
         cudaMemcpyAsync(
             beginOutputMem_h,
@@ -141,61 +140,74 @@ void TableGPU::propagate()
             cuStream);
 
         cudaStreamSynchronize(cuStream);
-
-        Timer::end("TableGPU::updateDomains");
     }
-
+    Timer::end("TableGPU::updateDomains");
     filterDomains(instData_h);
 }
 
 __global__
-void updateDomainsKernel(Table::InstanceData instData)
+void updateDomainsKernel(Table::InstanceData instData, u32 const domainsMemSize, u32 const domainsInfoMemSize)
 {
-    if (*instData.someValidTuple)
+    assert(blockDim.x == 32);
+
+    __shared__ u32 * domains_s;
+    __shared__ Table::DomainsInfo * domainsInfo_s;
+    extern __shared__ u32 sMem[];
+
+    if (*instData.nValidTuples > 0)
     {
         // Copy instance data in registers
         Table::InstanceData instData_r = instData;
 
-        // Retrieve variable information
-        u32 const varIdx = instData_r.unfixedVars[blockIdx.y];
-        Table::DomainsInfo dInfo_r = instData_r.domainsInfo[varIdx];
-
-        // Copy domains words in shared
-        u32 const firstWordIdx = dInfo_r.firstWordIdx + TableGPU::nWordsPerBlock * blockIdx.x;
-        u32 const wIdx = getDiv32(threadIdx.x);
-        u32 domWord_r = instData_r.domains[firstWordIdx + wIdx];
-
-        u32 const laneIdx = getMod32(threadIdx.x);
-        if (domWord_r != 0)
+        if (threadIdx.x == 0)
         {
-            // Check values
-            i32 const firstValue = dInfo_r.firstBitValue + TableGPU::nWordsPerBlock * 32 * blockIdx.x;
-            for (u32 valIdx = 0; valIdx < 32; valIdx += 1)
+            LinearAllocator allocator(sMem, getSharedMemorySize());
+            domains_s = allocator.allocate<u32>(domainsMemSize);
+            domainsInfo_s = allocator.allocate<Table::DomainsInfo>(domainsInfoMemSize);
+        }
+        __syncwarp();
+
+        //for (u32 uvIdx = 0; uvIdx < instData_r.nUnfixedVars; uvIdx += 1)
+        u32 const uvIdx = blockIdx.x;
+        {
+            u32 const vIdx = instData_r.unfixedVars[uvIdx];
+            auto dInfo = instData.domainsInfo[vIdx];
+            domainsInfo_s[uvIdx] = dInfo;
+
+            u32 const firstWordIdx = dInfo.firstWordIdx;
+            u32 const nWords = dInfo.nWords;
+            for (u32 wIdx = threadIdx.x; wIdx < nWords; wIdx += 32)
             {
-                i32 const val = firstValue + wIdx * 32 + valIdx;
-                bool isSupported = false;
-                u32 bMask = 1 << 31 - valIdx;
-                bool const isPresent = domWord_r & bMask;
-                if (isPresent)
-                {
-                    // Check support
-                    auto const * const validTuplesBW = reinterpret_cast<Table::BigWordType*>(instData_r.validTuples);
-                    u32 const rIdx = dInfo_r.firstWordIdx * 32 + val - dInfo_r.firstBitValue;
-                    u32 const nBigWordsSupportsRow = instData_r.supportsCols / Table::BigWordBits;
-                    auto const * const supportsRowBW = BitMatrix::getRowAs<Table::BigWordType>(instData_r.supportsRows, instData_r.supportsCols, instData_r.supports, rIdx);
-                    for (u32 bwIdx = laneIdx; bwIdx < nBigWordsSupportsRow and (not isSupported); bwIdx += 32)
-                    {
-                        auto const validTuplesWordBW = validTuplesBW[bwIdx];
-                        auto const supportsWordBW = supportsRowBW[bwIdx];
-                        isSupported = __reduce_or_sync(__activemask(), isAndNotZero(&validTuplesWordBW, &supportsWordBW));
-                    }
-                }
-                isSupported = __reduce_or_sync(__activemask(), isSupported); // DO NOT REMOVE!
-                domWord_r = isSupported ? domWord_r : domWord_r & ~bMask;
+                domains_s[firstWordIdx + wIdx] = 0;
             }
-            if (laneIdx == 0)
+            __syncwarp();
+        }
+
+        u32 bvtIdx, evtIdx;
+        getBeginEnd(&bvtIdx,&evtIdx, blockIdx.y, gridDim.y, *instData_r.nValidTuples);
+        for (u32 vtIdx = bvtIdx; vtIdx < evtIdx; vtIdx += 1)
+        {
+            u32 const tIdx = instData_r.validTuples[vtIdx];
+            //for (u32 uvIdx = threadIdx.x; uvIdx < instData_r.nUnfixedVars; uvIdx += 32)
             {
-                 instData_r.domains[firstWordIdx + wIdx] = domWord_r;
+                u32 const vIdx = instData_r.unfixedVars[uvIdx];
+                i32 const val = instData_r.tuples[(tIdx * instData_r.nVars) + vIdx];
+                u32 const valIdx = val - domainsInfo_s[uvIdx].firstBitValue;
+                u32 const valWordIdx = getDiv32(valIdx);
+                u32 const valMask = 1 << 31 - getMod32(valIdx);
+                domains_s[domainsInfo_s[uvIdx].firstWordIdx + valWordIdx] |= valMask;
+            }
+            __syncwarp();
+        }
+
+        // Write domains in global
+        //for (u32 uvIdx = 0; uvIdx < instData_r.nUnfixedVars; uvIdx += 1)
+        {
+            u32 const firstWordIdx = domainsInfo_s[uvIdx].firstWordIdx;
+            u32 const nWords = domainsInfo_s[uvIdx].nWords;
+            for (u32 wIdx = threadIdx.x; wIdx < nWords; wIdx += 32)
+            {
+                atomicOr(instData_r.domains + firstWordIdx + wIdx, domains_s[firstWordIdx + wIdx]) ;
             }
         }
     }

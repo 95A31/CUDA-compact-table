@@ -30,6 +30,7 @@ public:
    virtual int getBitDomainWords() const noexcept {return 0;}
    virtual int getBitDomainSmallestValue() const noexcept {return 0;}
    virtual void dumpBitDomainWords(unsigned int * words) const noexcept {};
+   virtual void loadBitDomainWords(unsigned int * words) const noexcept {};
    virtual void assign(int v) = 0;
    virtual void remove(int v) = 0;
    virtual void removeBelow(int newMin) = 0;

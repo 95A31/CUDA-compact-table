@@ -11,10 +11,6 @@
 class Table : public Constraint
 {
     public:
-        using BigWordType = Fca::u512;
-        Fca::u32 static constexpr BigWordBits = sizeof(BigWordType) * 8;
-        Fca::u32 static constexpr BigWordAlign = alignof(BigWordType);
-
         struct DomainsInfo
         {
             Fca::u32 firstWordIdx;
@@ -29,10 +25,8 @@ class Table : public Constraint
             // Read only
             Fca::u32 nVars;
             Fca::u32 nTuples;
-            Fca::u32 supportsCols;
-            Fca::u32 supportsRows;
             Fca::u32 maxWordsInDomain;
-            Fca::u32 * supports;
+            Fca::i32 * tuples;
 
             // Input
             Fca::u32 nChangedVars;
@@ -42,7 +36,7 @@ class Table : public Constraint
             DomainsInfo * domainsInfo;
 
             // Input/Output
-            Fca::u32 * someValidTuple; // Bool
+            Fca::u32 * nValidTuples;
             Fca::u32 * validTuples;
             Fca::u32 * domains;
         };
@@ -52,18 +46,18 @@ class Table : public Constraint
 
         std::vector<var<int>::Ptr> vars;
         std::vector<std::vector<int>> tuples;
+        trail<unsigned int> nValidTuples;
         TrailArray<unsigned int> validTuples;
         TrailArray<unsigned int> lastSize;
+        Fca::u32 * tmpValidTuples;
+        Fca::u32 * tmpDomains;
 
-        Fca::u32 supportMemSize;
+        Fca::u32 tuplesMemSize;
         Fca::u32 changedVarsMemSize;
         Fca::u32 unfixedVarsMemSize;
         Fca::u32 domainsInfoMemSize;
         Fca::u32 validTuplesMemSize;
         Fca::u32 domainsMemSize;
-
-        Fca::u32 tmpMaskMemSize;
-        Fca::u32 * tmpMask;
 
     public:
         Table(std::vector<var<int>::Ptr> & vars,  std::vector<std::vector<int>> & tuples);
@@ -76,6 +70,7 @@ class Table : public Constraint
         virtual void allocateInstanceData();
         void initializeInstanceData(InstanceData * instData);
         void updateInstanceData(InstanceData * instData);
+        void clearDomains(InstanceData * instData, Fca::u32 * domains);
         void updateValidTuples(InstanceData * instData);
         void updateDomains(InstanceData * instData);
         void filterDomains(InstanceData * instData);

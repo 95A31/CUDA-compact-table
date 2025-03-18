@@ -6,10 +6,6 @@
 
 class TableGPU : public Table
 {
-    public:
-        Fca::u32 static constexpr BlockSize = 32;
-        Fca::u32 static constexpr nWordsPerBlock = BlockSize / 32;
-
     private:
         InstanceData * instData_d;
         InstanceData * instData_h;
@@ -25,6 +21,7 @@ class TableGPU : public Table
         Fca::u32 outputMemSize;
 
         // CUDA
+        Fca::u32 smCount;
         cudaStream_t cuStream;
 
     public:
@@ -33,11 +30,7 @@ class TableGPU : public Table
         void propagate() override;
     protected:
         void allocateInstanceData() override;
-        // void initPropagateLowLatency();
-        // void propagateBase();
 };
 
-__global__ void updateDomainsKernel(Table::InstanceData id);
-// __global__ void calcIntervalsKernel(Fca::i32 nActivities, Cumulative::StartInterval const * si_d, Fca::i32 const * p_d, Fca::i32 * nIntervals_d, Cumulative::Interval * i_d);
-// __global__ void resetConsistencyKernel(bool * isConsistent_d);
-// __global__ void updateBoundsKernel(Fca::i32 nActivities, Fca::i32 const * h_d, Fca::i32 const * p_d, Fca::i32 c, Fca::i32 * nIntervals_d, Cumulative::Interval const * i_d, Cumulative::StartInterval * si_d, bool * isConsistent_d);
+__global__ void updateDomainsKernel(Table::InstanceData id, Fca::u32 domainsMemSize, Fca::u32 domainsInfoMemSize);
+

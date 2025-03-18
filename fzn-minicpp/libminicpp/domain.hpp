@@ -57,6 +57,7 @@ public:
     int getNumWords() const noexcept {return _words_count;}
     int getSmallestValue() const noexcept {return _smallest_val;}
     void dumpWords(unsigned int * words);
+    void loadWords(unsigned int * words, IntNotifier& x);
 
     void assign(int v,IntNotifier& x);
     void remove(int v,IntNotifier& x);

@@ -65,6 +65,7 @@ public:
    int getBitDomainWords() const noexcept override  {return _dom->getNumWords();}
    int getBitDomainSmallestValue()  const noexcept override  {return _dom->getSmallestValue();}
    void dumpBitDomainWords(unsigned int * words) const noexcept override {_dom->dumpWords(words);}
+   void loadBitDomainWords(unsigned int * words) const noexcept override {_dom->loadWords(words, *_domListener);}
 
    void assign(int v) override;
    void remove(int v) override;

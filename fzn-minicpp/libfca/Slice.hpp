@@ -33,8 +33,8 @@ namespace Fca
             __host__ __device__ Slice<T> & operator=(Slice<T> const & other) = delete;
             __host__ __device__ inline Slice<T> & operator=(Slice<T> && other);
             __host__ __device__ void print() const;
-        protected:
             __host__ __device__ static void print(T const * begin, T const * end);
+            __host__ __device__ static void print(T const * begin, u32 size);
     };
 
     template<typename T>
@@ -120,5 +120,12 @@ namespace Fca
             printf(",%d", *t);
         }
         printf("\n");
+    }
+
+    template<typename T>
+    __host__ __device__
+    void Slice<T>::print(T const * begin, u32 const size)
+    {
+        if (size > 0)  print(begin, begin + size);
     }
 }

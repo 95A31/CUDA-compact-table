@@ -43,8 +43,6 @@ template <class T,typename SizeType = std::size_t> class TrailArray
 
       T const & get(SizeType i) const noexcept { return _data[i];}
 
-      T const & operator[](SizeType i) const noexcept  { return _data[i];}
-
       bool changed() const noexcept { return _magic == _trailer->magic();}
 
       void set(SizeType i, T const & v)

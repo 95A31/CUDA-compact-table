@@ -21,6 +21,8 @@
 #include "mathUtils.h"
 #include "bitsUtils.h"
 #include <iostream>
+#include <libfca/Utils.hpp>
+
 #include "bitset.hpp"
 BitDomain::BitDomain(Trailer::Ptr eng,Storage::Ptr store,int min, int max)
     : _min(eng,min),
@@ -42,29 +44,29 @@ BitDomain::BitDomain(Trailer::Ptr eng,Storage::Ptr store,int min, int max)
 
 int BitDomain::count(int from, int to) const
 {
-    from = from  - _smallest_val;
-    int fromWordIdx = from / 32;
-    int fromBitIdx = from % 32;
-    unsigned int fromMask = getRightFilledMask32(fromBitIdx);
+    int minIdx = from  - _smallest_val;
+    int minWordIdx = minIdx / 32;
+    int minBitIdx = minIdx % 32;
+    unsigned int minWordMask = getRightFilledMask32(minBitIdx);
 
-    to = to - _smallest_val;
-    int toWordIdx = to / 32;
-    int toBitIdx = to % 32;
-    unsigned int toMask = getLeftFilledMask32(toBitIdx);
+    int maxIdx = to - _smallest_val;
+    int maxWordIdx = maxIdx / 32;
+    int maxBitIdx = maxIdx % 32;
+    unsigned int maxWordMask = getLeftFilledMask32(maxBitIdx);
 
     int count = 0;
-    if(fromWordIdx == toWordIdx)
+    if (minWordIdx == maxWordIdx)
     {
-        count += getPopCount(_dom[fromWordIdx] & fromMask & toMask);
+        count += getPopCount(_dom[minWordIdx] & minWordMask & maxWordMask);
     }
     else
     {
-        count += getPopCount(_dom[fromWordIdx] & fromMask);
-        count += getPopCount(_dom[toWordIdx] & toMask);
-        for(int wordIdx = fromWordIdx + 1; wordIdx < toWordIdx; wordIdx += 1)
+        count += getPopCount(_dom[minWordIdx] & minWordMask);
+        for(int wordIdx = minWordIdx + 1; wordIdx < maxWordIdx; wordIdx += 1)
         {
             count += getPopCount(_dom[wordIdx]);
         }
+        count += getPopCount(_dom[maxWordIdx] & maxWordMask);
     }
     return count;
 }
@@ -73,68 +75,68 @@ int BitDomain::findMin(int from) const
 {
     assert(_sz > 0);
     
-    from = from  - _smallest_val;
-    int fromWordIdx = from / 32;
-    int fromBitIdx = from % 32;
-    unsigned int fromMask = getRightFilledMask32(fromBitIdx);
+    int minIdx = from  - _smallest_val;
+    int minWordIdx = minIdx / 32;
+    int minBitIdx = minIdx % 32;
+    unsigned int minWordmask = getRightFilledMask32(minBitIdx);
 
-    int to = _max - _smallest_val;
-    int toWordIdx = to / 32;
-    int toBitIdx = to % 32;
-    unsigned int toMask = getLeftFilledMask32(toBitIdx);
+    int maxIdx = _max - _smallest_val;
+    int maxWordIdx = maxIdx / 32;
+    int maxBitIdx = maxIdx % 32;
+    unsigned int maxWordMask = getLeftFilledMask32(maxBitIdx);
 
-    if(fromWordIdx == toWordIdx)
+    if (minWordIdx == maxWordIdx)
     {
-        return _smallest_val + (32 * fromWordIdx) + getLeftmostOneIndex32(_dom[fromWordIdx] & fromMask & toMask);
+        return _smallest_val + (32 * minWordIdx) + getLeftmostOneIndex32(_dom[minWordIdx] & minWordmask & maxWordMask);
     }
     else
     {
-        if((_dom[fromWordIdx] & fromMask) != 0)
+        if((_dom[minWordIdx] & minWordmask) != 0)
         {
-            return _smallest_val + (32 * fromWordIdx) + getLeftmostOneIndex32(_dom[fromWordIdx] & fromMask);
-        }        
-        for(int wordIdx = fromWordIdx + 1; wordIdx < toWordIdx; wordIdx += 1)
+            return _smallest_val + (32 * minWordIdx) + getLeftmostOneIndex32(_dom[minWordIdx] & minWordmask);
+        }
+        for (int wordIdx = minWordIdx + 1; wordIdx < maxWordIdx; wordIdx += 1)
         {
             if(_dom[wordIdx] != 0)
             {
                 return _smallest_val + (32 * wordIdx) + getLeftmostOneIndex32(_dom[wordIdx]);
             }
         }
-        return _smallest_val + (32 * toWordIdx) + getLeftmostOneIndex32(_dom[toWordIdx] & toMask);
+        return _smallest_val + (32 * maxWordIdx) + getLeftmostOneIndex32(_dom[maxWordIdx] & maxWordMask);
     }
 }
 int BitDomain::findMax(int to) const
 {
     assert(_sz > 0);
 
-    int from = _min  - _smallest_val;
-    int fromWordIdx = from / 32;
-    int fromBitIdx = from % 32;
-    unsigned int fromMask = getRightFilledMask32(fromBitIdx);
+    int minIdx = _min  - _smallest_val;
+    int minWordIdx = minIdx / 32;
+    int minBitIdx = minIdx % 32;
+    unsigned int minWordMask = getRightFilledMask32(minBitIdx);
 
-    to = to - _smallest_val;
-    int toWordIdx = to / 32;
-    int toBitIdx = to % 32;
-    unsigned int toMask = getLeftFilledMask32(toBitIdx);
+    int maxIdx = to - _smallest_val;
+    int maxWordIdx = maxIdx / 32;
+    int maxBitIdx = maxIdx % 32;
+    unsigned int maxWordMask = getLeftFilledMask32(maxBitIdx);
 
-    if(fromWordIdx == toWordIdx)
+    if (minWordIdx == maxWordIdx)
     {
-        return _smallest_val + (32 * fromWordIdx) + getRightmostOneIndex32(_dom[fromWordIdx] & fromMask & toMask);
+        return _smallest_val + (32 * minWordIdx) + getRightmostOneIndex32(_dom[minWordIdx] & minWordMask & maxWordMask);
     }
     else
     {
-        if((_dom[toWordIdx] & toMask) != 0)
+        if((_dom[maxWordIdx] & maxWordMask) != 0)
         {
-            return _smallest_val + (32 * toWordIdx) + getRightmostOneIndex32(_dom[toWordIdx] & toMask);
+            return _smallest_val + (32 * maxWordIdx) + getRightmostOneIndex32(_dom[maxWordIdx] & maxWordMask);
         }
-        for(int wordIdx = toWordIdx - 1; wordIdx >= fromWordIdx; wordIdx -= 1)
+        for (int wordIdx = maxWordIdx - 1; wordIdx > minWordIdx; wordIdx -= 1)
         {
-            if(_dom[wordIdx] != 0)
+            if (_dom[wordIdx] != 0)
             {
                 return _smallest_val + (32 * wordIdx) + getRightmostOneIndex32(_dom[wordIdx]);
             }
         }
-        return _smallest_val + (32 * fromWordIdx) + getRightmostOneIndex32(_dom[fromWordIdx] & fromMask);
+        return _smallest_val + (32 * minWordIdx) + getRightmostOneIndex32(_dom[minWordIdx] & minWordMask);
     }
 }
 
@@ -144,6 +146,74 @@ void BitDomain::dumpWords(unsigned int *words)
     for (int wIdx = 0; wIdx < _words_count; wIdx += 1)
     {
         words[wIdx] = _dom[wIdx];
+    }
+}
+
+void BitDomain::loadWords(unsigned int * words, IntNotifier & x)
+{
+
+    int minIdx = _min - _smallest_val;
+    int minWordIdx = minIdx / 32;
+    int minBitIdx = minIdx % 32;
+    unsigned int minWordMask = getRightFilledMask32(minBitIdx);
+
+    int maxIdx = _max - _smallest_val;
+    int maxWordIdx = maxIdx / 32;
+    int maxBitIdx = maxIdx % 32;
+    unsigned int maxWordMask = getLeftFilledMask32(maxBitIdx);
+
+    unsigned int currentWord;
+    if (minWordIdx == maxWordIdx)
+    {
+        currentWord = words[minWordIdx] & minWordMask & maxWordMask;
+        _dom[minWordIdx] = currentWord;
+    }
+    else
+    {
+        currentWord = words[minWordIdx] & minWordMask;
+        _dom[minWordIdx] = currentWord;
+
+        for (int wIdx = minWordIdx + 1; wIdx < maxWordIdx; wIdx += 1)
+        {
+            currentWord =  words[wIdx];
+            _dom[wIdx] = currentWord;
+        }
+
+        currentWord =  words[maxWordIdx] & maxWordMask;
+        _dom[maxWordIdx] = currentWord;
+    }
+
+    int const newSize = count(_min, _max);
+    if (newSize != 0)
+    {
+        bool sizeChanged = _sz != newSize;
+        if (sizeChanged)
+        {
+            _sz = newSize;
+            x.change();
+            if (_sz == 1)
+            {
+                x.bind();
+            }
+        }
+        int newMin = findMin(_min);
+        int newMax= findMax(_max);
+        bool minChanged = newMin != _min;
+        bool maxChanged = newMax != _max;
+        if (minChanged)
+        {
+            _min = newMin;
+            x.changeMin();
+        }
+        if (maxChanged)
+        {
+            _max = newMax;
+            x.changeMax();
+        }
+    }
+    else
+    {
+        x.empty();
     }
 }
 
