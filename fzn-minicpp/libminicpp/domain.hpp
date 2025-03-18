@@ -22,7 +22,8 @@
 #include "store.hpp"
 #include "bitsUtils.h"
 #include "bitset.hpp"
-#define GETBIT(b) ((_dom[((b) - _imin) / 32]) & (getMask32(b % 32)))
+
+#define GETBIT(b) ((_dom[((b) - _smallest_val) / 32]) & (getMask32(b % 32)))
 
 struct IntNotifier   {
     virtual void empty() = 0;
@@ -35,8 +36,7 @@ struct IntNotifier   {
 class BitDomain {
     trail<unsigned int>*                 _dom;
     trail<int>                  _min,_max,_sz;
-    int const                 _initialMin,_initialMax,_initialSz;
-    int const        _imin,_words_count,_imax;
+    int const      _smallest_val,_words_count;
     int count(int from,int to) const;
     int findMin(int from) const;
     int findMax(int to) const;
@@ -47,25 +47,23 @@ public:
     int min() const { return _min;}
     int max() const { return _max;}
     int size() const { return _sz;}
-    int initialMin() const { return _initialMin;}
-    int initialMax() const { return _initialMax;}
-    int initialSize() const { return _initialSz;}
     bool isBound() const { return _sz == 1;}
     bool member(int v) const noexcept { return _min <= v && v <= _max && GETBIT(v);}
     bool changed() const noexcept { return !_sz.fresh();}
     bool changedMin() const noexcept { return !_min.fresh();}
     bool changedMax() const noexcept { return !_max.fresh();}
     bool memberBase(int v) const noexcept { return GETBIT(v);}
-    int getIthVal(int index) const;
-    void dump(int min, int max, unsigned int * dump) const;
-    void dumpWithOffset(int min, int max, unsigned int * dump,int offset) const;
-    std::vector<int> dumpToVecOfInts();
-    const int getNoWords() {return _words_count;}
+
+    int getNumWords() const noexcept {return _words_count;}
+    int getSmallestValue() const noexcept {return _smallest_val;}
+    void dumpWords(unsigned int * words);
+
     void assign(int v,IntNotifier& x);
     void remove(int v,IntNotifier& x);
     void removeBelow(int newMin,IntNotifier& x);
     void removeAbove(int newMax,IntNotifier& x);
     friend std::ostream& operator<<(std::ostream& os,const BitDomain& x);
+
 };
 
 class SparseSet {

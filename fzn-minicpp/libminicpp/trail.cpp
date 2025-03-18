@@ -14,7 +14,8 @@
  */
 
 #include "trail.hpp"
-#include <assert.h>
+#include <cassert>
+#include <cstdlib>
 
 #define TSIZE (1 << 20)
 

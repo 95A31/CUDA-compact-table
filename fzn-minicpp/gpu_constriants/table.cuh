@@ -1,65 +1,43 @@
 #pragma once
 
-#include "global_constraints/table.hpp"
-#include <libfca/Types.hpp>
-#include <libgpu/Memory.cuh>
-#include <libgpu/LinearAllocator.cuh>
-#include <libminicpp/varitf.hpp>
-#include <libminicpp/constraint.hpp>
-using namespace std;
-using namespace Fca;
-using namespace Gpu::Memory;
+#include <libgpu/libgpu.cuh>
 
-class TableGPU : public Table{
+#include "global_constraints/table.hpp"
+
+class TableGPU : public Table
+{
+    public:
+        Fca::u32 static constexpr BlockSize = 32;
+        Fca::u32 static constexpr nWordsPerBlock = BlockSize / 32;
 
     private:
+        InstanceData * instData_d;
+        InstanceData * instData_h;
 
-        unsigned int *_supports_dev; //array of arrays linearized
-        int * _currTable_size_dev; //just a pointer to a single element
-        int * _supportSize_dev; //just a pointer to a single element
-        int * _supportOffsetJmp_dev; //array
-        int * _variablesOffsets_dev; //array
-        int * _vars_dev; //array (matrix) (the domains)
-        int currTableSize;
-        int noVars;
-        int *_noVars_dev;
-        int *_vars_host;
-        unsigned int * _vars_to_remove_host;
-        unsigned int * _tmpMasks;
+        LinearAllocator * readOnlyAlloc_h;
+        LinearAllocator * readOnlyAlloc_d;
 
-        unsigned int* _CT_mask_svs_host;
-        unsigned int* _CT_mask_svs_dev;
-        
+        LinearAllocator * inputOutputAlloc_h;
+        LinearAllocator * inputOutputAlloc_d;
 
-        int noBlocksFilter;
-        const int noStreams=1; //hardcoded, don't touch IN THIS BRANCH
+        void * beginOutputMem_h;
+        void * beginOutputMem_d;
+        Fca::u32 outputMemSize;
 
-        cudaStream_t* streams;
+        // CUDA
+        cudaStream_t cuStream;
 
-        int *doms_doms_before_dev;
-        int internalIndex;
-        int *doms_doms_before_host;
-
-        unsigned int* buffer; //just for the new dump
-        int buffSize;
-        unsigned int* _supportsT_host;
-        unsigned int* _supportsT_dev;
-        int* noTuples_dev; 
-        
     public:
-        TableGPU(vector<var<int>::Ptr> & vars,  vector<vector<int>> & tuples);
+        TableGPU(std::vector<var<int>::Ptr> & vars, std::vector<std::vector<int>> & tuples);
         void post() override;
         void propagate() override;
-    private:
-        void dumpDomainsGPU2();
-
-        
+    protected:
+        void allocateInstanceData() override;
+        // void initPropagateLowLatency();
+        // void propagateBase();
 };
 
-__global__ void  filterDomainsGPU(unsigned int * _CT_mask_svs_dev, int* _currTable_dev_size, int* _vars_dev, int *_supportOffsetJmp_dev, unsigned int* _supports_dev , int * supportSize_dev);
-__global__ void updateTableGPU(unsigned int* _supports_dev,unsigned int * _svSize_off_sval_dev, int *_supportOffsetJmp_dev, unsigned int * _currTable_dev,int* _currTable_dev_size, int* _vars_dev, int* offsetsAndLimits, unsigned int* _tmpMasks,int * noTuples);
-__global__ void reduce(unsigned int* _CT_mask_svs_dev,unsigned int* _tmpMasks,int* _currTable_size_dev);
-
-void transposeSupports(unsigned int* supports, unsigned int* supportsTransposed, int supportSize, int currTableSize, int noVars , int* _supportOffsetJmp_dev, vector<var<int>::Ptr> & vars);
-int bitsFromRight(int n);
-int bitsFromLeft(int n);
+__global__ void updateDomainsKernel(Table::InstanceData id);
+// __global__ void calcIntervalsKernel(Fca::i32 nActivities, Cumulative::StartInterval const * si_d, Fca::i32 const * p_d, Fca::i32 * nIntervals_d, Cumulative::Interval * i_d);
+// __global__ void resetConsistencyKernel(bool * isConsistent_d);
+// __global__ void updateBoundsKernel(Fca::i32 nActivities, Fca::i32 const * h_d, Fca::i32 const * p_d, Fca::i32 c, Fca::i32 * nIntervals_d, Cumulative::Interval const * i_d, Cumulative::StartInterval * si_d, bool * isConsistent_d);

@@ -11,7 +11,7 @@ find_package(CUDAToolkit REQUIRED)
 set(CMAKE_CUDA_COMPILER ${CUDAToolkit_NVCC_EXECUTABLE})
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-set(CMAKE_CUDA_ARCHITECTURES "86;89;")
+set(CMAKE_CUDA_ARCHITECTURES "86;89")
 set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 string(APPEND CMAKE_CUDA_FLAGS_DEBUG " -G")
 string(APPEND CMAKE_CUDA_FLAGS_RELWITHDEBINFO " -lineinfo")
@@ -45,13 +45,11 @@ set(FZN_CONSTR_SRC
 set(GLB_CONSTR_SRC
 	global_constraints/cumulative.cpp
 	global_constraints/table.cpp
-	global_constraints/smart_table.cpp
 	global_constraints/stable_matching.cpp
 )
 set(GPU_CONSTR_SRC
 	gpu_constriants/cumulative.cu
 	gpu_constriants/table.cu
-	gpu_constriants/smart_table.cu
 )
 set (FZN_MINICPP_SRC
 	fzn_cli_helper.cpp
@@ -63,6 +61,10 @@ set (FZN_MINICPP_SRC
 	main.cpp
 )
 
+set (PROFILING_SRC
+	libfca/Timer.cpp
+)
+
 # Executable
-add_executable(fzn-minicpp ${FZN_MINICPP_SRC} ${FZN_CONSTR_SRC} ${GLB_CONSTR_SRC} ${GPU_CONSTR_SRC})
+add_executable(fzn-minicpp ${FZN_MINICPP_SRC} ${FZN_CONSTR_SRC} ${GLB_CONSTR_SRC} ${GPU_CONSTR_SRC} ${PROFILING_SRC})
 target_link_libraries(fzn-minicpp libfzn libminicpp)

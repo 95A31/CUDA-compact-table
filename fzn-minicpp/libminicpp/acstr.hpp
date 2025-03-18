@@ -16,6 +16,7 @@
 #ifndef __ACSTR_H
 #define __ACSTR_H
 
+#include <algorithm>
 #include "handle.hpp"
 #include "trailable.hpp"
 

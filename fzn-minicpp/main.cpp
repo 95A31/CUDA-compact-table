@@ -10,7 +10,9 @@
 #include "fzn_search_helper.h"
 #include "fzn_statistics_helper.h"
 #include "fzn_variables_helper.h"
+
 #include <sys/resource.h>
+
 int main(int argc, char * argv[])
 {
     
@@ -103,6 +105,7 @@ int main(int argc, char * argv[])
         if (args["s"].count() != 0)
         {
             FznStatisticsHelper::printStatistics(stats, solver, fzn_model, search, cout);
+            std::cout << Timer::summary();
         }
 
         exit(EXIT_SUCCESS);

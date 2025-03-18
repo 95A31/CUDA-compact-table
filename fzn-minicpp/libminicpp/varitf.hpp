@@ -6,6 +6,7 @@
 #include "solver.hpp"
 #include "trailList.hpp"
 #include "bitset.hpp"
+
 template<> class var<int> : public AVar {
    friend class Storage;
 private:
@@ -20,20 +21,15 @@ public:
    virtual int min() const  = 0;
    virtual int max() const  = 0;
    virtual int size() const = 0;
-   virtual int intialSize() const = 0;
-   virtual int initialMin() const = 0;
-   virtual int initialMax() const = 0;
    virtual bool isBound() const = 0;
    virtual bool changed() const noexcept = 0;
    virtual bool changedMax() const noexcept = 0;
    virtual bool changedMin() const noexcept = 0;
    virtual bool contains(int v) const = 0;
    virtual bool containsBase(int v) const { return contains(v);}
-   virtual void dump(int min, int max, unsigned int * dump) const {throw std::runtime_error("Unsupported opration");};
-   virtual void dumpWithOffset(int min, int max,unsigned int* dump, int offset) const {throw std::runtime_error("Unsupported opration");};
-   virtual std::vector<int> dumpDomainToVec() {throw std::runtime_error("Unsupported opration");};
-   virtual const int getSizeOfBitSet() {throw std::runtime_error("Unsupported opration");};
-   virtual int getIthVal(int index) const { throw std::runtime_error("Unsupported opration");};
+   virtual int getBitDomainWords() const noexcept {return 0;}
+   virtual int getBitDomainSmallestValue() const noexcept {return 0;}
+   virtual void dumpBitDomainWords(unsigned int * words) const noexcept {};
    virtual void assign(int v) = 0;
    virtual void remove(int v) = 0;
    virtual void removeBelow(int newMin) = 0;

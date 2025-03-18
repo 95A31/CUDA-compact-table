@@ -47,7 +47,7 @@ void calDivBounds(int aMin, int aMax, int bMin, int bMax, int & min, int & max)
 
 void calPowBounds(int aMin, int aMax, int bMin, int bMax, int & min, int & max)
 {
-    using namespace Fca::Utils::Math;
+    using namespace Fca::Math;
 
     min = std::numeric_limits<int>::max();
     max = std::numeric_limits<int>::min();
@@ -283,7 +283,7 @@ void int_mod::propagate()
 
 void int_pow::propagate()
 {
-    using namespace Fca::Utils::Math;
+    using namespace Fca::Math;
 
     //Semantic: a ^ b = c
     int aMin = _a->min();

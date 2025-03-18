@@ -1,224 +1,340 @@
 #include "table.hpp"
-#include <unistd.h>
-#include <chrono>
-//#define RECORD_OUTPUT
+
+#include <libfca/BitMatrix.hpp>
+#include <libfca/Timer.hpp>
+#include <libfca/Utils.hpp>
+#include <libgpu/libgpu.cuh>
+
+#include <climits>
+#include <numeric>
+#include <algorithm>
+
+using namespace std;
+using namespace Fca;
+using namespace Fca::Math;
 
 Table::Table(vector<var<int>::Ptr> & vars, vector<vector<int>> & tuples) :
-    Constraint(vars[0]->getSolver()), 
-    _vars(vars), _tuples(tuples), 
-    _currTable(SparseBitSet(vars[0]->getSolver()->getStateManager(),vars[0]->getSolver()->getStore(),tuples.size())){
-    
-    #ifdef RECORD_OUTPUT
-        auto start = std::chrono::high_resolution_clock::now();
-    #endif
+    Constraint(vars[0]->getSolver()),
+    vars(vars),
+    tuples(tuples),
+    validTuples(vars[0]->getSolver()->getStateManager(), vars[0]->getSolver()->getStore(), getDiv32(getSupportsCols(tuples))),
+    lastSize(vars[0]->getSolver()->getStateManager(),vars[0]->getSolver()->getStore(),vars.size())
+{
+    calculateInstanceDataMemSize();
+}
 
-    int noTuples=tuples.size();
-    int noVars=vars.size();
-    
-    _s_val= vector<int>();
-    _s_sup= vector<int>();
-    _supportOffsetJmp=vector<int>(noVars);
-    _variablesOffsets=vector<int>(noVars);
+void Table::calculateInstanceDataMemSize()
+{
+    u32 const nVars = static_cast<u32>(vars.size());
+    u32 const supportsCols = getSupportsCols(tuples);
+    u32 const supportsRows = getSupportsRows(vars);
+    supportMemSize = BitMatrix::getDataSize(supportsRows, supportsCols);
+    changedVarsMemSize = sizeof(u32) * nVars;
+    unfixedVarsMemSize = sizeof(u32) * nVars;
+    domainsInfoMemSize = sizeof(DomainsInfo) * nVars;
+    validTuplesMemSize = supportsCols / 8; // Bits -> Bytes
+    domainsMemSize = supportsRows / 8; // Bits -> Bytesq
+    tmpMaskMemSize = supportsCols / 8; // Bits -> Bytes
 
-    //creating the CT
-    _currTable=SparseBitSet(vars[0]->getSolver()->getStateManager(),vars[0]->getSolver()->getStore(),tuples.size());
+}
 
-    for (int i = 0; i < noVars; i++){        
-        //calculating the number of rows in the support bitset
-        _supportSize+=vars[i]->intialSize();
-        //store the offset
-        _variablesOffsets[i]=vars[i]->initialMin();      
-    }
+void Table::allocateInstanceData()
+{
+    instData = static_cast<InstanceData*>(malloc(sizeof(InstanceData)));
 
+    u32 const allocatorMemSize =
+        BigWordAlign + supportMemSize +
+        LinearAllocator::DefaultAlign + changedVarsMemSize +
+        LinearAllocator::DefaultAlign + unfixedVarsMemSize +
+        LinearAllocator::DefaultAlign + domainsInfoMemSize +
+        LinearAllocator::DefaultAlign + sizeof(u32) + // someValidTuple
+        BigWordAlign + validTuplesMemSize +
+        LinearAllocator::DefaultAlign + domainsMemSize;
 
-    //calculating the offset of the variables, used in accessing the support rows    
-    _supportOffsetJmp[0]=0;
-    for (int i = 1; i < noVars; i++){
-        _supportOffsetJmp[i]=_supportOffsetJmp[i-1]+vars[i-1]->intialSize();
-    }
-
-    //we allocate and initialize the support bitsets
-    currTableSize=(noTuples/32)+1; 
-    _supports=(unsigned int*) calloc(_supportSize*currTableSize,sizeof(unsigned int));
-
-    
-    bool found=false;
-    int tuplesOfSingletons[noVars];
-    //we already perform an intial filtering on the CT, by removing tuples that are not supported by any variable (e.g. x>10, the domain is pruned before startng the computation)
-    for (int v = 0; v < noVars; v++){
-        tuplesOfSingletons[v]=-1;
-        for (int t = 0; t < noTuples; t++){
-            if(tuples[t][v]>=_vars[v]->initialMin() && tuples[t][v]<=_vars[v]->initialMax()){
-                //classical entry (we update all the supports in the same way)
-                int entryValue=tuples[t][v]-_variablesOffsets[v];   
-                
-                int offset=(_supportOffsetJmp[v]+entryValue)*currTableSize;
-
-                addToMaskInt(&(_supports[offset]),t+1); 
-
-                found=true;
-                tuplesOfSingletons[v]=t;
-            }else{
-                _currTable.addToMaskInt(t+1);
-            }
-        }
-        //if for all tuples we weren't able to find a tuple supported we already fail
-        if (found==false){
-            failNow();
-            return;
-        }
-    }
-    
-    _currTable.reverseMask();
-    _currTable.intersectWithMask();
-    _currTable.clearMask();
-
-    //forall vars, if the domain is a singleton, we check if there is a tuple that supports it, else we fail already
-    for (int i = 0; i < noVars; i++){
-        if(_vars[i]->size()==1){
-            if(tuplesOfSingletons[i]==-1){
-                failNow();
-                return;
-            }
-        }
-    }
-
-    if(_currTable.isEmpty()){
-        failNow();
-        return;
-    }
-
-    #ifdef RECORD_OUTPUT
-        auto end = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        printf("%%%%%% Time to init table (serial): %ld us\n", duration.count());
-    #endif
+    auto * const allocator = new LinearAllocator(malloc(allocatorMemSize), allocatorMemSize);
+    instData->supports = allocator->allocate<u32>(supportMemSize, BigWordAlign);
+    instData->changedVars = allocator->allocate<u32>(changedVarsMemSize);
+    instData->unfixedVars = allocator->allocate<u32>(unfixedVarsMemSize);
+    instData->domainsInfo = allocator->allocate<DomainsInfo>(domainsInfoMemSize);
+    instData->someValidTuple = allocator->allocate<u32>(sizeof(u32));
+    instData->validTuples = allocator->allocate<u32>(validTuplesMemSize, BigWordAlign);
+    instData->domains = allocator->allocate<u32>(domainsMemSize);
 }
 
 void Table::post()
 {
-    propagate();
-    for (auto const & v : _vars){
-       v->propagateOnBoundChange(this);
+    for (auto const & v : vars)
+    {
+        v->propagateOnBoundChange(this);
     }
 
+    allocateInstanceData();
+    tmpMask = static_cast<u32*>(aligned_alloc(BigWordAlign, tmpMaskMemSize));
+
+    initializeInstanceData(instData);
+
+    // Initialize last sizes
+    for (u32 vIdx = 0; vIdx < instData->nVars; vIdx += 1)
+    {
+        lastSize.set(vIdx, INT_MAX);
+    }
+
+    // Initialize valid tuples
+    u32 const nWords = validTuples.size();
+    for (u32 wIdx = 0; wIdx < nWords; wIdx += 1)
+    {
+        validTuples.set(wIdx, UINT_MAX);
+    }
+
+    propagate();
 }
 
 void Table::propagate()
 {
-    enfoceGAC();   
+    updateInstanceData(instData);
+    updateValidTuples(instData);
+    updateDomains(instData);
+    filterDomains(instData);
 }
 
-//---------------------------------------------
-//------- The three functions of alg. 2 -------
-//---------------------------------------------
-
-void Table::updateTable(){
-    int index=0;
-    
-    //forall var x in s_val
-    for(int i=0; i < _s_val.size(); ++i){
-        //Clear the mask and get the index of the var in s_val
-        _currTable.clearMask();
-        index=_s_val[i];
-
-        //reset based update, for each value in the domain of x we check if a tuple is supported
-        for (int j = _vars[index]->min(); j <= _vars[index]->max();  j++){ 
-
-            if(_vars[index]->contains(j)){
-                int index_x_a=(_supportOffsetJmp[index]+j-_variablesOffsets[index])*currTableSize;
-                _currTable.addToMaskArray(&(_supports[index_x_a]));
-            }
-        } 
-        _currTable.intersectWithMask();
-    }
-    
-    if(_currTable.isEmpty()){
-        failNow();
-        return;
-    }
+Fca::u32 Table::getSupportsRows(std::vector<var<int>::Ptr> vars) const
+{
+    return accumulate(
+        vars.begin(),
+        vars.end(),
+        0u,
+        [&](u32 const a, var<int>::Ptr const & v) -> u32 {return a + v->getBitDomainWords() * 32;}); // Domains uses 32-bits words
 }
 
-void Table::filterDomains(){
+Fca::u32 Table::getSupportsCols(std::vector<std::vector<int>> const &tuples) const
+{
+    return roundUpPosInt(tuples.size(), BigWordBits); // Bytes -> bits
+}
 
-    //for all the vars in ssup
-    for(int i=0; i < _s_sup.size(); ++i){
-        //get the index of the var
-        int index=_s_sup[i];
-        //for all the values in the domain of the var we check if the value is supported by one tuple
-        for (int j = _vars[index]->min(); j <= _vars[index]->max(); j++){
-            if(_vars[index]->contains(j)){ //i.e. a \in dom(x)
-                int index_x_a=_supportOffsetJmp[index]+j-_vars[index]->initialMin();
-                int indexResidue=intersectIndexSparse(&_supports[index_x_a*currTableSize],_currTable);
-                    
-                if(indexResidue==-1){
-                    _vars[index]->remove(j);        
-                }     
+void Table::initializeInstanceData(InstanceData * instData)
+{
+    // Basic data
+    instData->nVars = static_cast<u32>(vars.size());
+    instData->nTuples = static_cast<u32>(tuples.size());
+    instData->supportsCols =  getSupportsCols(tuples);
+    instData->supportsRows = getSupportsRows(vars);
+    instData->maxWordsInDomain = std::transform_reduce(
+        vars.begin(),
+        vars.end(),
+        0,
+        [&](u32 a, u32 b) {return std::max(a, b);},
+        [&](var<int>::Ptr const & v) {return v->getBitDomainWords();});
+
+    // Domains info
+    u32 firstWordIdx = 0;
+    for (u32 vIdx = 0; vIdx < instData->nVars; vIdx += 1)
+    {
+        auto const & var = vars[vIdx];
+        auto & dInfo = instData->domainsInfo[vIdx];
+        dInfo.firstWordIdx = firstWordIdx;
+        dInfo.nWords = var->getBitDomainWords(); // Domains uses 32-bits words
+        dInfo.firstBitValue = var->getBitDomainSmallestValue();
+        dInfo.min = var->min();
+        dInfo.max = var->max();
+        firstWordIdx += dInfo.nWords;
+    }
+    // Supports
+    u32 const nBigWords = (instData->supportsCols / BigWordBits) * instData->supportsRows;
+    auto * const supportsBW = reinterpret_cast<BigWordType*>(instData->supports);
+    for (u32 wIdx = 0; wIdx < nBigWords; wIdx += 1)
+    {
+        setZero(supportsBW + wIdx);
+    }
+    for (u32 vIdx = 0; vIdx < instData->nVars; vIdx += 1)
+    {
+        auto const & var = vars[vIdx];
+        auto const & dInfo = instData->domainsInfo[vIdx];
+        for (u32 tIdx = 0; tIdx < instData->nTuples; tIdx += 1)
+        {
+            i32 const val = tuples.at(tIdx).at(vIdx);
+            u32 const rIdx = (dInfo.firstWordIdx * 32) + val - dInfo.firstBitValue;
+            if (var->contains(val))
+            {
+                BitMatrix::set(instData->supportsRows, instData->supportsCols, instData->supports, rIdx, tIdx, true);
             }
         }
     }
 }
 
-void Table::enfoceGAC(){
-    #ifdef RECORD_OUTPUT
-       auto start = std::chrono::high_resolution_clock::now();
-    #endif
-    _s_val.clear();
-    _s_sup.clear();
-    _s_val.shrink_to_fit();
-    _s_sup.shrink_to_fit();
-	for (int i = 0; i < _vars.size(); i++){
-		
-        if(_vars[i]->changed()){
-            _s_val.push_back(i);
+void Table::updateInstanceData(InstanceData * instData)
+{
+    // Update variables
+    instData->nChangedVars = 0;
+    instData->nUnfixedVars = 0;
+    for (u32 vIdx = 0; vIdx < instData->nVars; vIdx += 1)
+    {
+        u32 const vSize = vars[vIdx]->size();
+        if (vSize != lastSize[vIdx])
+        {
+            instData->changedVars[instData->nChangedVars] = vIdx;
+            instData->nChangedVars += 1;
         }
+        if (vSize != 1)
+        {
+            instData->unfixedVars[instData->nUnfixedVars] = vIdx;
+            instData->nUnfixedVars += 1;
+        }
+    }
+
+    // Update valid tuples
+    u32 nWords = validTuples.size();
+    for (u32 wIdx = 0; wIdx < nWords; wIdx += 1)
+    {
+        instData->validTuples[wIdx] = validTuples[wIdx];
+    }
+
+    // Update domains info
+    for (u32 vIdx = 0; vIdx < instData->nVars; vIdx += 1)
+    {
+        auto const & var = vars[vIdx];
+        auto & dInfo = instData->domainsInfo[vIdx];
+        dInfo.min = var->min();
+        dInfo.max = var->max();
+        var->dumpBitDomainWords(instData->domains + dInfo.firstWordIdx);
+    }
+}
+
+void Table::updateValidTuples(InstanceData * instData)
+{
+    Timer::begin("Table::updateValidTuples");
+
+    // Update
+    u32 const nBigWords = instData->supportsCols / BigWordBits;
+    auto * const tmpMaskBW = reinterpret_cast<BigWordType*>(tmpMask);
+    *instData->someValidTuple = true;
+    for (u32 cvIdx = 0; cvIdx < instData->nChangedVars and *instData->someValidTuple; cvIdx += 1)
+    {
+       // Clear mask
+        for (u32 wIdx = 0; wIdx < nBigWords; wIdx += 1)
+        {
+            setZero(tmpMaskBW + wIdx);
+        }
+
+        // Supports -> mask
+        u32 const vIdx = instData->changedVars[cvIdx];
+        DomainsInfo const & dInfo = instData->domainsInfo[vIdx];
+        for (i32 val = dInfo.min; val <= dInfo.max; val += 1)
+        {
+            u32 const vOffset = val - dInfo.firstBitValue;
+            u32 const bIdx = getMod32(vOffset);
+            u32 const wMask = getMask32(bIdx);
+            u32 const wIdx = dInfo.firstWordIdx + getDiv32(vOffset);
+            bool const contains = instData->domains[wIdx] & wMask;
+            if (contains)
+            {
+                u32 const rIdx = wIdx * 32 + bIdx;
+                auto const * const supportsRowBW = BitMatrix::getRowAs<BigWordType>(instData->supportsRows, instData->supportsCols, instData->supports, rIdx);
+                for (u32 bwIdx = 0; bwIdx < nBigWords; bwIdx += 1)
+                {
+                    bitwiseOr(tmpMaskBW + bwIdx, supportsRowBW + bwIdx);
+                }
+            }
+        }
+
+        // Mask -> validTuples
+        auto * const validTuplesBW = reinterpret_cast<BigWordType*>(instData->validTuples);
+        bool someValidTuple = false;
+        for (u32 bwIdx = 0; bwIdx < nBigWords; bwIdx += 1)
+        {
+            bitwiseAnd(validTuplesBW + bwIdx, tmpMaskBW + bwIdx);
+            someValidTuple = someValidTuple or (not isZero(validTuplesBW + bwIdx));
+        }
+        *instData->someValidTuple = someValidTuple;
+    }
+    Timer::end("Table::updateValidTuples");
+}
+
+void Table::updateDomains(InstanceData * instData)
+{
+    Timer::begin("Table::updateDomains");
+
+    u32 const nBigWords = instData->supportsCols / BigWordBits;
+    auto * const validTuplesBW = reinterpret_cast<BigWordType*>(instData->validTuples);
+    if (*instData->someValidTuple)
+    {
+        for (u32 uvIdx = 0; uvIdx < instData->nUnfixedVars; uvIdx += 1)
+        {
+            // ValidTuples -> domains
+            u32 const vIdx = instData->unfixedVars[uvIdx];
+            DomainsInfo & dInfo = instData->domainsInfo[vIdx];
+            for (i32 val = dInfo.min; val <= dInfo.max; val += 1)
+            {
+                u32 const vOffset = val - dInfo.firstBitValue;
+                u32 const bIdx = getMod32(vOffset);
+                u32 const wMask = getMask32(bIdx);
+                u32 const wIdx = dInfo.firstWordIdx + getDiv32(vOffset);
+                bool const contains = instData->domains[wIdx] & wMask;
+                if (contains)
+                {
+                    u32 const rIdx = wIdx * 32 + bIdx;
+                    bool someSupport = false;
+                    auto const * const supportsRowBW = BitMatrix::getRowAs<BigWordType>(instData->supportsRows, instData->supportsCols, instData->supports, rIdx);
+                    for (u32 bwIdx = 0; bwIdx < nBigWords and (not someSupport); bwIdx += 1)
+                    {
+                        someSupport = someSupport or isAndNotZero(supportsRowBW + bwIdx, validTuplesBW + bwIdx);
+                    }
+                    if (not someSupport)
+                    {
+                        instData->domains[wIdx] &= ~wMask;
+                    }
+                }
+            }
+        }
+    }
+    Timer::end("Table::updateDomains");
+}
+
+void Table::filterDomains(InstanceData * instData)
+{
+    if (*instData->someValidTuple)
+    {
+        Timer::begin("Table::filterDomains");
         
-        if(_vars[i]->size()>1){
-            _s_sup.push_back(i);
+        // Filter domains
+        for (u32 uvIdx = 0; uvIdx < instData->nUnfixedVars; uvIdx += 1) // For each variable
+        {
+            u32 const vIdx = instData->unfixedVars[uvIdx];
+            auto const var = vars[vIdx];
+            auto const & dInfo = instData->domainsInfo[vIdx];
+
+            for (i32 val = dInfo.min; val <= dInfo.max; val += 1) // For each value
+            {
+                if (var->containsBase(val))
+                {
+                    u32 const vOffset = val - dInfo.firstBitValue;
+                    u32 const bIdx = getMod32(vOffset);
+                    u32 const wMask = getMask32(bIdx);
+                    u32 const wIdx = dInfo.firstWordIdx + getDiv32(vOffset);
+                    bool const contains = instData->domains[wIdx] & wMask;
+                    if (not contains)
+                    {
+                        var->remove(val);
+                    }
+                }
+            }
         }
-	}
-    #ifdef RECORD_OUTPUT
-	    auto startUpdate = std::chrono::high_resolution_clock::now();
-    #endif
-    updateTable();
-    #ifdef RECORD_OUTPUT
-        auto endUpdate = std::chrono::high_resolution_clock::now();
-        auto startFilter = std::chrono::high_resolution_clock::now();
-    #endif
-    
-    filterDomains();
 
-    #ifdef RECORD_OUTPUT
-        auto endFilter = std::chrono::high_resolution_clock::now();
-        auto end = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        auto durationUpdate = std::chrono::duration_cast<std::chrono::microseconds>(endUpdate - startUpdate);
-        auto durationFilter = std::chrono::duration_cast<std::chrono::microseconds>(endFilter - startFilter);
-        printf("%%%%%% Time to propagate: %ld us (update %ld) (filter %ld)\n", duration.count(), durationUpdate.count(), durationFilter.count());
-    #endif
-    
+        // Update valid tuples
+        u32 const nWords = validTuples.size();
+        for (u32 wIdx = 0; wIdx < nWords; wIdx += 1)
+        {
+            validTuples.set(wIdx, instData->validTuples[wIdx]);
+        }
 
-}
-
-void Table::addToMaskInt(unsigned int* mask,int value){  
-	int offset;
-    int bitsPerWord=32;
-	unsigned int wordToOr=(unsigned int) 1<<(bitsPerWord-(value%bitsPerWord));
-   
-	int wordIndex=floor(value/bitsPerWord);
-	if(value%bitsPerWord==0){
-		wordIndex--;
-	}
-	mask[wordIndex]=mask[wordIndex] | wordToOr;
-}
-
-int Table::intersectIndexSparse(unsigned int* words,SparseBitSet& m) {
-
-   int offset;
-   for (int i = 0; i < currTableSize; i++) {
-   
-      if ((words[i] & m[i]) != 0)
-         return i;
-   }
-   return -1;
+        // Update last sizes
+        for (u32 vIdx = 0; vIdx < instData->nVars; vIdx += 1)
+        {
+            lastSize.set(vIdx, vars[vIdx]->size());
+        }
+        Timer::end("Table::filterDomains");
+    }
+    else
+    {
+        failNow();
+    }
 }

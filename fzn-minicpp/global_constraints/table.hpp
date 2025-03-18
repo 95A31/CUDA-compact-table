@@ -1,77 +1,84 @@
 #pragma once
 
+
 #include <libminicpp/varitf.hpp>
-#include <libminicpp/bitset.hpp>
+#include <libminicpp/trailArray.hpp>
+#include <libminicpp/constraint.hpp>
 
+#include <libfca/Types.hpp>
+#include <libfca/LinearAllocator.cuh>
 
-using namespace std;
-
-
-
-/*
-int variablesNo; //the length of scope  -> we have them in vars
-char** scope; //variable names -> we have them in vars
-
-bitSet currTable; //row (bitvector) of current valid rows in the table -> StaticBitSet
-int supportSize; //the length (no of rows) of the supports bitset (CONSTANT)
-
-
-bitSet* supports; //table of which values for each variable are required in a constraint
-bitSet* supportsShort; //additional bitset to deal with short tables, bitset value to 1 iff (x,a) strictly accepted by the i-th tuple     //(in the paper they are supports*)
-bitSet* supportsMin; //additional bitset to deal with <= and < (smart tables)
-bitSet* supportsMax; //additional bitset to deal with >= and > (smart tables)
-
-
-
-int* lastSizes; //current domain size of each var
-int* s_val; //indexes of the vars not yet instanciated whose domain changed from last iteration (could be replaced by a bitset)
-int* s_sup; //indexes of the vars not yet inst. with at least one value in their domain for which no support has yet been found (could be replaced by a bitset)
-long* residues; 
-
-
-long* supportSizes; //for each var the size of it's domain (CONSTANT), the sizes are the actual sizes (i.e. var 5..7: y; has size 3 not 7 as if was starting from 0)
-long* supportOffsetJmp; //for each var the index of the row in "supports" in which such variable starts (CONSTANT)
-
-
-long* variablesOffsets; //offset of the variables, used in accessing the support rows (not all variables start from 0, eg  90..120, variablesOffsets[i]=90) 
-
-*/
-
-
-
-class Table : public Constraint{
-    // Constraint private data structures
-    protected:
-        
-        vector<var<int>::Ptr> _vars;
-        vector<vector<int>> _tuples;
-
-        SparseBitSet _currTable; 
-
-        int _supportSize; //the length (no of rows) of the supports bitset (CONSTANT)
-
-        unsigned int *_supports; //table of which values for each variable are required in a constraint
-        int currTableSize;
-    
-
-        vector<int> _s_val; //indexes of the vars not yet instanciated whose domain changed from last iteration (could be replaced by a bitset)
-        vector<int> _s_sup; //indexes of the vars not yet inst. with at least one value in their domain for which no support has yet been found (could be replaced by a bitset)
-   
-        vector<int> _supportOffsetJmp; //for each var the index of the row in "supports" in which such variable starts (CONSTANT)
-       
-        vector<int> _variablesOffsets; //offset of the variables, used in accessing the support rows (not all variables start from 0, eg  90..120, variablesOffsets[i]=90) 
-        bool after=false;
+class Table : public Constraint
+{
     public:
-        Table(vector<var<int>::Ptr> & vars,  vector<vector<int>> & tuples);
-        void post() override;
-        void propagate() override;    
-    protected:
-        void enfoceGAC();
-        void updateTable();
-        void filterDomains();
-        void addToMaskInt(unsigned int* mask,int value);
-        int intersectIndexSparse(unsigned int* words,SparseBitSet& m);
+        using BigWordType = Fca::u512;
+        Fca::u32 static constexpr BigWordBits = sizeof(BigWordType) * 8;
+        Fca::u32 static constexpr BigWordAlign = alignof(BigWordType);
 
+        struct DomainsInfo
+        {
+            Fca::u32 firstWordIdx;
+            Fca::i32 firstBitValue;
+            Fca::u32 nWords;
+            Fca::i32 min;
+            Fca::i32 max;
+        };
+
+        struct InstanceData
+        {
+            // Read only
+            Fca::u32 nVars;
+            Fca::u32 nTuples;
+            Fca::u32 supportsCols;
+            Fca::u32 supportsRows;
+            Fca::u32 maxWordsInDomain;
+            Fca::u32 * supports;
+
+            // Input
+            Fca::u32 nChangedVars;
+            Fca::u32 nUnfixedVars;
+            Fca::u32 * changedVars;
+            Fca::u32 * unfixedVars;
+            DomainsInfo * domainsInfo;
+
+            // Input/Output
+            Fca::u32 * someValidTuple; // Bool
+            Fca::u32 * validTuples;
+            Fca::u32 * domains;
+        };
+
+    protected:
+        InstanceData * instData;
+
+        std::vector<var<int>::Ptr> vars;
+        std::vector<std::vector<int>> tuples;
+        TrailArray<unsigned int> validTuples;
+        TrailArray<unsigned int> lastSize;
+
+        Fca::u32 supportMemSize;
+        Fca::u32 changedVarsMemSize;
+        Fca::u32 unfixedVarsMemSize;
+        Fca::u32 domainsInfoMemSize;
+        Fca::u32 validTuplesMemSize;
+        Fca::u32 domainsMemSize;
+
+        Fca::u32 tmpMaskMemSize;
+        Fca::u32 * tmpMask;
+
+    public:
+        Table(std::vector<var<int>::Ptr> & vars,  std::vector<std::vector<int>> & tuples);
+        void post() override;
+        void propagate() override;
+    protected:
+        Fca::u32 getSupportsRows(std::vector<var<int>::Ptr> vars) const;
+        Fca::u32 getSupportsCols(std::vector<std::vector<int>> const & tuples) const;
+        void calculateInstanceDataMemSize();
+        virtual void allocateInstanceData();
+        void initializeInstanceData(InstanceData * instData);
+        void updateInstanceData(InstanceData * instData);
+        void updateValidTuples(InstanceData * instData);
+        void updateDomains(InstanceData * instData);
+        void filterDomains(InstanceData * instData);
 };
 
 

@@ -79,7 +79,7 @@ std::string Timer::summary()
 	const int percentage_size          = max((int)percentage.length(), 15);
 
 	ss << "%% +-------------------" << endl;
-	ss << "%% | Profiling Summery" << endl;
+	ss << "%% | Profiling Summary" << endl;
 	ss << "%% +-------------------" << endl;
 	ss << "%% | ";
 	ss.width(func_name_size);

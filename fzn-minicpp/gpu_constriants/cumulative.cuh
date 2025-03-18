@@ -2,11 +2,13 @@
 
 #include <tuple>
 #include <libfca/Types.hpp>
-#include <libgpu/Memory.cuh>
-#include <libgpu/LinearAllocator.cuh>
+#include <libgpu/libgpu.cuh>
+#include <libfca/LinearAllocator.cuh>
 #include <libminicpp/varitf.hpp>
 #include <libminicpp/constraint.hpp>
 #include "global_constraints/cumulative.hpp"
+
+#include <cuda_runtime.h>
 
 #define MAX_INTERVALS_PER_ACTIVITY_PAIR 12
 #define CUMULATIVE_BLOCK_SIZE 128
@@ -28,8 +30,8 @@ class CumulativeGPU : public Cumulative
         StartInterval * si_h;
         bool * isConsistent_d;
         StartInterval * si_d;
-        Gpu::LinearAllocator * allocator_h;
-        Gpu::LinearAllocator * allocator_d;
+        LinearAllocator * allocator_h;
+        LinearAllocator * allocator_d;
 
         // CUDA
         Fca::u32 sm_count;

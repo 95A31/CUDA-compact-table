@@ -1,6 +1,6 @@
 #include <libfca/Array.hpp>
 #include <libfca/Utils.hpp>
-#include <libgpu/Utils.cuh>
+#include <libgpu/libgpu.cuh>
 #include "gpu_constriants/cumulative.cuh"
 
 CumulativeGPU::CumulativeGPU(std::vector<var<int>::Ptr> & s, std::vector<int> const & p, std::vector<int> const & h, int c) :
@@ -18,8 +18,8 @@ CumulativeGPU::CumulativeGPU(std::vector<var<int>::Ptr> & s, std::vector<int> co
     h_d = mallocDevice<i32>(Array<i32>::getDataSize(nActivities));
     nIntervals_d = mallocDevice<i32>(sizeof(i32));
     i_d = mallocDevice<Interval>(Array<Interval>::getDataSize(MAX_INTERVALS_PER_ACTIVITY_PAIR * nActivities * nActivities));
-    allocator_h = new Gpu::LinearAllocator(mallocHost<void>(INPUT_OUTPUT_MEMORY), INPUT_OUTPUT_MEMORY);
-    allocator_d = new Gpu::LinearAllocator(mallocDevice<void>(INPUT_OUTPUT_MEMORY), INPUT_OUTPUT_MEMORY);
+    allocator_h = new LinearAllocator(mallocHost<void>(INPUT_OUTPUT_MEMORY), INPUT_OUTPUT_MEMORY);
+    allocator_d = new LinearAllocator(mallocDevice<void>(INPUT_OUTPUT_MEMORY), INPUT_OUTPUT_MEMORY);
     isConsistent_h = allocator_h->allocate<bool>(sizeof(bool));
     si_h = allocator_h->allocate<StartInterval>(Array<StartInterval>::getDataSize(nActivities));
     isConsistent_d = allocator_d->allocate<bool>(sizeof(bool));
@@ -103,7 +103,7 @@ __global__
 void calcIntervalsKernel(Fca::i32 nActivities, Cumulative::StartInterval const * si_d, Fca::i32 const * p_d, Fca::i32 * nIntervals_d, Cumulative::Interval * i_d)
 {
     using namespace Fca;
-    using namespace Gpu::Utils::Parallel;
+    using namespace Gpu::Parallel;
 
     u32 ijBegin, ijEnd;
     getBeginEnd(&ijBegin, &ijEnd, blockIdx.x, gridDim.x, nActivities * nActivities);
@@ -176,7 +176,7 @@ void updateBoundsKernel(Fca::i32 nActivities, Fca::i32 const * h_d, Fca::i32 con
 {
     using namespace Fca;
     using namespace Gpu::Memory;
-    using namespace Gpu::Utils::Parallel;
+    using namespace Gpu::Parallel;
 
     __shared__ Cumulative::StartInterval si_s[MAX_ACTIVITIES];
 
