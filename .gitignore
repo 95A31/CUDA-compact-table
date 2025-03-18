@@ -3,5 +3,6 @@
 .vscode
 fzn-minicpp/.vscode
 fzn-minicpp/build/*
-fzn-minicpp/tests/tableTests/SimpleTables/* 
+fzn-minicpp/tests/*
+fzn-minicpp/cmake*
 
